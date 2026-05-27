@@ -1,0 +1,9 @@
+{
+    "uuid": "french-republican-calendar@pierrotws.github.com",
+    "name": "French Republican Calendar",
+    "description": "Displays the French Republican Calendar in the top panel",
+    "shell-version": ["45", "46", "47", "48", "49", "50"],
+    "url": "https://github.com/Pierrotws/french-republican-calendar",
+    "version": 9,
+    "gettext-domain": "FRC"
+}

@@ -8,12 +8,12 @@ You will find here some work related to gnome-shell especially the following ext
 
 # French Revolutionary Calendar
 
-<img align="right" src="FRC@jcdubacq.dubacq.fr/icon.png?raw=true" alt="French Revolutionary Calendar" />
+<img align="right" src="french-republican-calendar@pierrotws.github.com/icon.png?raw=true" alt="French Revolutionary Calendar" />
 This utility displays the current date of the [French Republican Calendar](http://en.wikipedia.org/wiki/French_Republican_Calendar) in the top panel using the [equinox rule](http://en.wikipedia.org/wiki/French_Republican_Calendar#Converting_from_the_Gregorian_Calendar).
 
 It also displays (when clicked) details such as the name of the day and the aspect celebrated this day (often a plant or an instrument of labor).
 
-![Version 8 in action](FRC@jcdubacq.dubacq.fr/screenshot.png?raw=true "Version 8 in action")
+![Version 8 in action](french-republican-calendar@pierrotws.github.com/screenshot.png?raw=true "Version 8 in action")
 
 
 ## Evolution of the extension :
