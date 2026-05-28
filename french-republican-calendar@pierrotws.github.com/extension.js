@@ -280,6 +280,42 @@ class Astro {
 
         return this.cache['FRC'];
     }
+
+    /*  Return the JD of 1 Vendémiaire of the given French Republican year.  */
+    french_revolutionary_year_start_jd(an) {
+        if (this.cachestamp['FRC_year_' + an] === an) {
+            return this.cache['FRC_year_' + an];
+        }
+        // Year `an` begins at the September equinox of Gregorian year an + 1791
+        // (an = 1 → Gregorian 1792). Verify and adjust by ±1 year if needed.
+        let candidate = this.paris_equinoxe_jd(an + 1791);
+        let check = this.jd_to_french_revolutionary(candidate);
+        if (!(check[0] === an && check[1] === 1 && check[2] === 1 && check[3] === 1)) {
+            const fallback = this.paris_equinoxe_jd(an + 1790);
+            const check2 = this.jd_to_french_revolutionary(fallback);
+            if (check2[0] === an && check2[1] === 1 && check2[2] === 1 && check2[3] === 1) {
+                candidate = fallback;
+            } else {
+                candidate = this.paris_equinoxe_jd(an + 1792);
+            }
+        }
+        this.cachestamp['FRC_year_' + an] = an;
+        this.cache['FRC_year_' + an] = candidate;
+        return candidate;
+    }
+
+    /*  Convert a French Republican date to a Julian day.  */
+    french_to_jd(an, mois, decade, jour) {
+        const start = this.french_revolutionary_year_start_jd(an);
+        return start + (mois - 1) * 30 + (decade - 1) * 10 + (jour - 1);
+    }
+
+    /*  Number of days in a French Republican year (365 or 366) — i.e. the
+        number of Sans-culottides is this minus 360.  */
+    french_revolutionary_year_length(an) {
+        return this.french_revolutionary_year_start_jd(an + 1) -
+            this.french_revolutionary_year_start_jd(an);
+    }
 }
 
 Astro.J2000 = 2451545.0;
@@ -394,16 +430,212 @@ function _romanNumeral(n) {
     return '';
 }
 
+/* A month-grid widget for the French Republican Calendar, similar in spirit
+   to the native gnome-shell Calendar but laid out as 10 columns (Primidi …
+   Décadi) × 3 décades, with a special row for the Sans-culottides. */
+const FrenchRepublicanCalendarWidget = GObject.registerClass({
+    Signals: {'selected-date-changed': {param_types: [GObject.TYPE_DOUBLE]}},
+}, class FrenchRepublicanCalendarWidget extends St.Widget {
+    _init() {
+        super._init({
+            style_class: 'calendar',
+            layout_manager: new Clutter.GridLayout(),
+            reactive: true,
+        });
+
+        // Today, in FRC, decides which month is initially shown.
+        const todayJd = astro.gregorian_to_jd(
+            new Date().getFullYear(),
+            new Date().getMonth() + 1,
+            new Date().getDate());
+        const [an, mois] = astro.jd_to_french_revolutionary(todayJd);
+        this._selectedJd = todayJd;
+        this._displayedAn = an;
+        this._displayedMois = mois;
+
+        this._buildHeader();
+        this._rebuild();
+    }
+
+    _buildHeader() {
+        const layout = this.layout_manager;
+        this.destroy_all_children();
+
+        // Header: prev | "Month an N" | next, spanning 10 columns
+        this._topBox = new St.BoxLayout({style_class: 'calendar-month-header'});
+        layout.attach(this._topBox, 0, 0, 10, 1);
+
+        this._backButton = new St.Button({
+            style_class: 'calendar-change-month-back pager-button',
+            icon_name: 'pan-start-symbolic',
+            accessible_name: _('Previous month'),
+            can_focus: true,
+        });
+        this._backButton.connect('clicked', () => this._navigateMonth(-1));
+        this._topBox.add_child(this._backButton);
+
+        this._monthLabel = new St.Label({
+            style_class: 'calendar-month-label',
+            can_focus: true,
+            x_align: Clutter.ActorAlign.CENTER,
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._monthLabel.clutter_text.set_use_markup(true);
+        this._topBox.add_child(this._monthLabel);
+
+        this._forwardButton = new St.Button({
+            style_class: 'calendar-change-month-forward pager-button',
+            icon_name: 'pan-end-symbolic',
+            accessible_name: _('Next month'),
+            can_focus: true,
+        });
+        this._forwardButton.connect('clicked', () => this._navigateMonth(1));
+        this._topBox.add_child(this._forwardButton);
+
+        // Weekday-equivalent row: Pr / Du / Tr / Qu / Qi / Sx / Sp / Oc / No / Dé
+        const dayHeads = ['Pr', 'Du', 'Tr', 'Qu', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dé'];
+        for (let i = 0; i < 10; i++) {
+            const label = new St.Label({
+                style_class: 'calendar-day-heading',
+                text: dayHeads[i],
+                can_focus: true,
+            });
+            label.accessible_name = _dayNames[i];
+            layout.attach(label, i, 1, 1, 1);
+        }
+
+        // Children added beyond this are day buttons, replaced on rebuild.
+        this._firstDayIndex = this.get_n_children();
+    }
+
+    vfunc_scroll_event(event) {
+        switch (event.get_scroll_direction()) {
+        case Clutter.ScrollDirection.UP:
+        case Clutter.ScrollDirection.LEFT:
+            this._navigateMonth(-1);
+            break;
+        case Clutter.ScrollDirection.DOWN:
+        case Clutter.ScrollDirection.RIGHT:
+            this._navigateMonth(1);
+            break;
+        }
+        return Clutter.EVENT_PROPAGATE;
+    }
+
+    _navigateMonth(delta) {
+        let mois = this._displayedMois + delta;
+        let an = this._displayedAn;
+        // Year has 12 normal months + 1 Sans-culottides "month" (=13)
+        while (mois > 13) {
+            mois -= 13;
+            an += 1;
+        }
+        while (mois < 1) {
+            mois += 13;
+            an -= 1;
+        }
+        this._displayedAn = an;
+        this._displayedMois = mois;
+        this._rebuild();
+    }
+
+    setSelectedJd(jd) {
+        jd = Math.floor(jd) + 0.5;
+        if (this._selectedJd === jd)
+            return;
+        this._selectedJd = jd;
+        const [an, mois] = astro.jd_to_french_revolutionary(jd);
+        this._displayedAn = an;
+        this._displayedMois = mois;
+        this._rebuild();
+    }
+
+    _rebuild() {
+        const an = this._displayedAn;
+        const mois = this._displayedMois;
+        const layout = this.layout_manager;
+
+        // Remove previous day cells.
+        const children = this.get_children();
+        for (let i = this._firstDayIndex; i < children.length; i++) {
+            children[i].destroy();
+        }
+
+        const monthName = _monthNames[mois - 1];
+        this._monthLabel.set_text(`${monthName} an ${_romanNumeral(an)}`);
+
+        const todayJdFloor = Math.floor(astro.gregorian_to_jd(
+            new Date().getFullYear(),
+            new Date().getMonth() + 1,
+            new Date().getDate())) + 0.5;
+
+        if (mois === 13) {
+            // Sans-culottides: 5 or 6 days laid out in a single row that fills
+            // the 10-col grid as evenly as possible (5 days → 2 cols each,
+            // 6 days → 1 col each, centered).
+            const ndays = astro.french_revolutionary_year_length(an) - 360;
+            const cellWidth = Math.max(1, Math.floor(10 / ndays));
+            const usedCols = cellWidth * ndays;
+            const colOffset = Math.floor((10 - usedCols) / 2);
+            for (let d = 1; d <= ndays; d++) {
+                const jd = astro.french_to_jd(an, 13, 1, d);
+                const btn = this._makeDayButton(d, jd, jd === todayJdFloor, jd === this._selectedJd);
+                btn.set_label(_sansculottidesNames[d - 1]);
+                btn.add_style_class_name('calendar-sansculottide');
+                layout.attach(btn, colOffset + (d - 1) * cellWidth, 2, cellWidth, 1);
+            }
+        } else {
+            // 3 décades × 10 days
+            for (let decade = 1; decade <= 3; decade++) {
+                for (let dayIdx = 1; dayIdx <= 10; dayIdx++) {
+                    const dom = (decade - 1) * 10 + dayIdx;
+                    const jd = astro.french_to_jd(an, mois, decade, dayIdx);
+                    const btn = this._makeDayButton(
+                        dom, jd, jd === todayJdFloor, jd === this._selectedJd);
+                    if (decade === 1)
+                        btn.add_style_class_name('calendar-day-top');
+                    if (dayIdx === 1)
+                        btn.add_style_class_name('calendar-day-left');
+                    if (dayIdx === 10)
+                        btn.add_style_class_name('calendar-weekend');
+                    else
+                        btn.add_style_class_name('calendar-weekday');
+                    layout.attach(btn, dayIdx - 1, decade + 1, 1, 1);
+                }
+            }
+        }
+    }
+
+    _makeDayButton(label, jd, isToday, isSelected) {
+        const btn = new St.Button({
+            label: String(label),
+            can_focus: true,
+            style_class: 'calendar-day calendar-day-base',
+        });
+        if (isToday)
+            btn.add_style_class_name('calendar-today');
+        if (isSelected)
+            btn.add_style_pseudo_class('selected');
+        btn._jd = jd;
+        btn.connect('clicked', () => {
+            this._selectedJd = jd;
+            this._rebuild();
+            this.emit('selected-date-changed', jd);
+        });
+        return btn;
+    }
+});
+
 const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
     class FrenchRepublicanCalendarTopMenu extends PanelMenu.Button {
         _init() {
             super._init(0.5, 'FRC');
-            this.offsetval = 0;
-            this.offsetsign = 1;
-            this.offsettext = '';
             this._timeoutId = 0;
+            this._selectedDate = new Date();
             this.toptext = 'French Republican Calendar';
-            let hbox = new St.BoxLayout({style_class: 'panel-status-menu-box'});
+
+            const hbox = new St.BoxLayout({style_class: 'panel-status-menu-box'});
             hbox.add_child(new St.Label({
                 text: '▾',
                 y_expand: true,
@@ -418,7 +650,7 @@ const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
             hbox.add_child(this.toplabel);
             this.add_child(hbox);
 
-            const upd = ['longdate', 'longdateb', 'julian', 'iso'];
+            const upd = ['longdate', 'longdateb', 'offset'];
             for (let i = 0; i < upd.length; i++) {
                 this[upd[i]] = new PopupMenu.PopupMenuItem(upd[i], {activate: false});
                 this[upd[i] + 'label'] = this[upd[i]].label;
@@ -426,77 +658,35 @@ const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
             }
             this.menu.addMenuItem(this.longdate);
             this.menu.addMenuItem(this.longdateb);
+            this.menu.addMenuItem(this.offset);
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            this.menu.addMenuItem(this.julian);
-            this.menu.addMenuItem(this.iso);
 
-            this._offsetitem = new PopupMenu.PopupBaseMenuItem({activate: false});
-
-            this._morebackButton = new St.Button({
-                style_class: 'calendar-change-month-more-back',
-                accessible_name: _('Previous month'),
-                can_focus: true,
+            this._calendar = new FrenchRepublicanCalendarWidget();
+            this._calendar.connect('selected-date-changed', (_cal, jd) => {
+                const [gy, gm, gd] = astro.jd_to_gregorian(jd);
+                this._selectedDate = new Date(gy, gm - 1, gd);
+                this.update();
             });
-            this._offsetitem.add_child(this._morebackButton);
-            this._morebackButton._signalId = this._morebackButton.connect(
-                'clicked', this.changeOffsetMinusThirty.bind(this));
 
-            this._backButton = new St.Button({
-                style_class: 'calendar-change-month-back',
-                accessible_name: _('Previous day'),
-                can_focus: true,
+            const calendarItem = new PopupMenu.PopupBaseMenuItem({
+                activate: false,
+                reactive: false,
+                can_focus: false,
             });
-            this._offsetitem.add_child(this._backButton);
-            this._backButton._signalId = this._backButton.connect(
-                'clicked', this.changeOffsetMinusOne.bind(this));
+            calendarItem.remove_style_class_name('popup-menu-item');
+            calendarItem.add_child(this._calendar);
+            this.menu.addMenuItem(calendarItem);
 
-            this._offsetButton = new St.Button({
-                style_class: 'calendar-offset',
-                y_expand: true,
-                x_expand: true,
-                x_align: Clutter.ActorAlign.START,
-                y_align: Clutter.ActorAlign.CENTER,
-                can_focus: true,
+            this._menuOpenSignalId = this.menu.connect('open-state-changed', (_menu, isOpen) => {
+                if (isOpen) {
+                    const now = new Date();
+                    this._selectedDate = now;
+                    const jd = astro.gregorian_to_jd(
+                        now.getFullYear(), now.getMonth() + 1, now.getDate());
+                    this._calendar.setSelectedJd(jd);
+                    this.update();
+                }
             });
-            this.offsetlabel = new St.Label({
-                text: 'test',
-                y_expand: true,
-                x_expand: true,
-                x_align: Clutter.ActorAlign.START,
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-            this._offsetButton.set_child(this.offsetlabel);
-            this._offsetButton._signalId = this._offsetButton.connect(
-                'clicked', this.changeOffsetToday.bind(this));
-            this._offsetitem.add_child(this._offsetButton);
-
-            this._forwardButton = new St.Button({
-                style_class: 'calendar-change-month-forward',
-                accessible_name: _('Next day'),
-                can_focus: true,
-            });
-            this._offsetitem.add_child(this._forwardButton);
-            this._forwardButton._signalId = this._forwardButton.connect(
-                'clicked', this.changeOffsetPlusOne.bind(this));
-
-            this._moreforwardButton = new St.Button({
-                style_class: 'calendar-change-month-more-forward',
-                accessible_name: _('Next month'),
-                can_focus: true,
-            });
-            this._offsetitem.add_child(this._moreforwardButton);
-            this._moreforwardButton._signalId = this._moreforwardButton.connect(
-                'clicked', this.changeOffsetPlusThirty.bind(this));
-
-            this.menu.addMenuItem(this._offsetitem);
-
-            const naturalSize = this.iso.get_preferred_height(900000)[0] * 12;
-            const minSize = Main.panel.width / 6;
-            if (minSize > naturalSize) {
-                this.menu.actor.set_width(minSize);
-            } else {
-                this.menu.actor.set_width(naturalSize);
-            }
 
             this._timeoutId = GLib.timeout_add_seconds(
                 GLib.PRIORITY_DEFAULT, 1, () => {
@@ -506,23 +696,9 @@ const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
             this.update();
         }
 
-        changeOffset(value, relative) {
-            if (relative) {
-                this.offsetval += value;
-            } else {
-                this.offsetval = value;
-            }
-            this.update();
-        }
-        changeOffsetMinusThirty() { this.changeOffset(-30, true); }
-        changeOffsetPlusThirty() { this.changeOffset(30, true); }
-        changeOffsetMinusOne() { this.changeOffset(-1, true); }
-        changeOffsetPlusOne() { this.changeOffset(1, true); }
-        changeOffsetToday() { this.changeOffset(0, false); }
-
         update() {
             this._setDate();
-            const upd = ['top', 'longdate', 'longdateb', 'julian', 'iso', 'offset'];
+            const upd = ['top', 'longdate', 'longdateb', 'offset'];
             for (let i = 0; i < upd.length; i++) {
                 if (this[upd[i] + 'label']) {
                     this[upd[i] + 'label'].clutter_text.set_markup(this[upd[i] + 'text']);
@@ -532,40 +708,29 @@ const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
         }
 
         _setDate() {
-            var jrr, jrrr, date, longdate, longdateb;
-            const off = this.offsetsign * this.offsetval;
-            const time = new Date();
-            const j = astro.gregorian_to_jd(time.getFullYear(), time.getMonth() + 1, time.getDate());
-            const jj = j + off;
-            jrr = astro.jd_to_french_revolutionary(jj);
-            if (jj != 0) {
-                jrrr = astro.jd_to_french_revolutionary(j);
+            var jrrSelected, jrrToday, date, longdate, longdateb;
+            const today = new Date();
+            const sel = this._selectedDate;
+            const jToday = astro.gregorian_to_jd(today.getFullYear(), today.getMonth() + 1, today.getDate());
+            const jSel = astro.gregorian_to_jd(sel.getFullYear(), sel.getMonth() + 1, sel.getDate());
+            jrrSelected = astro.jd_to_french_revolutionary(jSel);
+            jrrToday = astro.jd_to_french_revolutionary(jToday);
+
+            const daymonth = this._daymonth(jrrSelected);
+            if (jrrSelected[1] != 13) {
+                longdate = _dayNames[jrrSelected[3] - 1] + ', ' + daymonth + ' ' + _monthNames[jrrSelected[1] - 1] + ', an ' + _romanNumeral(jrrSelected[0]);
+                longdateb = '<i>' + _saintsNames[jrrSelected[1] - 1][(jrrSelected[2] - 1) * 10 + jrrSelected[3] - 1] + '</i>, jour ' + jrrSelected[3] + ' de la ' + _decadeNames[jrrSelected[2] - 1] + ' décade';
             } else {
-                jrrr = jrr;
+                longdate = _sansculottidesNames[jrrSelected[3] - 1] + ', an ' + _romanNumeral(jrrSelected[0]);
+                longdateb = daymonth + ' jour des ' + _monthNames[jrrSelected[1] - 1];
             }
-            const offgd = astro.jd_to_gregorian(jj);
-            const daymonth = this._daymonth(jrr);
-            if (jrr[1] != 13) {
-                longdate = _dayNames[jrr[3] - 1] + ', ' + daymonth + ' ' + _monthNames[jrr[1] - 1] + ', an ' + _romanNumeral(jrr[0]);
-                longdateb = '<i>' + _saintsNames[jrr[1] - 1][(jrr[2] - 1) * 10 + jrr[3] - 1] + '</i>, jour ' + jrr[3] + ' de la ' + _decadeNames[jrr[2] - 1] + ' décade';
-            } else {
-                longdate = _sansculottidesNames[jrr[3] - 1] + ', an ' + _romanNumeral(jrr[0]);
-                longdateb = daymonth + ' jour des ' + _monthNames[jrr[1] - 1];
-            }
-            date = this._daymonth(jrrr) + ' ' + _monthNames[jrrr[1] - 1] + ', ' + _('year') + ' ' + jrrr[0];
+            // Top label always shows today's date
+            date = this._daymonth(jrrToday) + ' ' + _monthNames[jrrToday[1] - 1] + ', ' + _('year') + ' ' + jrrToday[0];
             this.toptext = date;
             this.longdatetext = longdate;
             this.longdatebtext = longdateb;
-            this.juliantext = '<b>' + _('Julian day') + '</b> ' + (jj - 0.5);
-            this.isotext = '<b>' + _('ISO-8601 date') + '</b> ' + offgd[0] + '-';
-            if (offgd[1] < 10) {
-                this.isotext = this.isotext + '0';
-            }
-            this.isotext = this.isotext + offgd[1] + '-';
-            if (offgd[2] < 10) {
-                this.isotext = this.isotext + '0';
-            }
-            this.isotext = this.isotext + offgd[2];
+
+            const off = Math.round(jSel - jToday);
             let offstring = '';
             if (off == 0) {
                 offstring = '<b>' + _('Today') + '</b>';
@@ -602,16 +767,9 @@ const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
                 GLib.source_remove(this._timeoutId);
                 this._timeoutId = 0;
             }
-            const buttons = [
-                '_morebackButton', '_backButton', '_offsetButton',
-                '_forwardButton', '_moreforwardButton',
-            ];
-            for (let i = 0; i < buttons.length; i++) {
-                const b = this[buttons[i]];
-                if (b && b._signalId) {
-                    b.disconnect(b._signalId);
-                    b._signalId = 0;
-                }
+            if (this._menuOpenSignalId) {
+                this.menu.disconnect(this._menuOpenSignalId);
+                this._menuOpenSignalId = 0;
             }
             super.destroy();
         }
