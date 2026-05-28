@@ -1,11 +1,6 @@
 #!/bin/sh
-# to be called in main extension directory
 
-if [ ! -d po ]; then
-  echo "Are you sure you are calling this script from the right location?"
-  echo "There is no po directory!"
-  exit 1
-fi
+cd french-republican-calendar@pierrotws.github.com || exit
 
 find . -name '*.js' -print0 | xargs -0 xgettext --from-code=UTF-8 -k_ -kN_ -o po/messages.pot
 

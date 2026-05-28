@@ -392,7 +392,9 @@ Astro.nutArgCoeff = [-171996, -1742, 92095, 89, -13187, -16, 5736, -31, -2274, -
 
 // END BORROWED CODE
 
-const astro = new Astro();
+// Instance is created in enable() and cleared in disable() so the extension
+// does not allocate resources at module-load time.
+let astro = null;
 
 const _monthNames = ['Vendémiaire', 'Brumaire', 'Frimaire', 'Nivôse', 'Pluviôse', 'Ventôse', 'Germinal', 'Floréal', 'Prairial', 'Messidor', 'Thermidor', 'Fructidor', 'Sans-culottides'];
 const _sansculottidesNames = ['jour de la vertu', 'jour du génie', 'jour du travail', 'jour de l´opinion', 'jour des récompenses', 'jour de la révolution'];
@@ -471,7 +473,8 @@ const FrenchRepublicanCalendarWidget = GObject.registerClass({
             accessible_name: _('Previous month'),
             can_focus: true,
         });
-        this._backButton.connect('clicked', () => this._navigateMonth(-1));
+        this._backButton.connectObject(
+            'clicked', () => this._navigateMonth(-1), this);
         this._topBox.add_child(this._backButton);
 
         this._monthLabel = new St.Label({
@@ -490,7 +493,8 @@ const FrenchRepublicanCalendarWidget = GObject.registerClass({
             accessible_name: _('Next month'),
             can_focus: true,
         });
-        this._forwardButton.connect('clicked', () => this._navigateMonth(1));
+        this._forwardButton.connectObject(
+            'clicked', () => this._navigateMonth(1), this);
         this._topBox.add_child(this._forwardButton);
 
         // Weekday-equivalent row: Pr / Du / Tr / Qu / Qi / Sx / Sp / Oc / No / Dé
@@ -618,11 +622,11 @@ const FrenchRepublicanCalendarWidget = GObject.registerClass({
         if (isSelected)
             btn.add_style_pseudo_class('selected');
         btn._jd = jd;
-        btn.connect('clicked', () => {
+        btn.connectObject('clicked', () => {
             this._selectedJd = jd;
             this._rebuild();
             this.emit('selected-date-changed', jd);
-        });
+        }, this);
         return btn;
     }
 });
@@ -662,11 +666,11 @@ const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
             this._calendar = new FrenchRepublicanCalendarWidget();
-            this._calendar.connect('selected-date-changed', (_cal, jd) => {
+            this._calendar.connectObject('selected-date-changed', (_cal, jd) => {
                 const [gy, gm, gd] = astro.jd_to_gregorian(jd);
                 this._selectedDate = new Date(gy, gm - 1, gd);
                 this.update();
-            });
+            }, this);
 
             const calendarItem = new PopupMenu.PopupBaseMenuItem({
                 activate: false,
@@ -677,7 +681,7 @@ const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
             calendarItem.add_child(this._calendar);
             this.menu.addMenuItem(calendarItem);
 
-            this._menuOpenSignalId = this.menu.connect('open-state-changed', (_menu, isOpen) => {
+            this.menu.connectObject('open-state-changed', (_menu, isOpen) => {
                 if (isOpen) {
                     const now = new Date();
                     this._selectedDate = now;
@@ -686,7 +690,7 @@ const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
                     this._calendar.setSelectedJd(jd);
                     this.update();
                 }
-            });
+            }, this);
 
             this._timeoutId = GLib.timeout_add_seconds(
                 GLib.PRIORITY_DEFAULT, 1, () => {
@@ -767,10 +771,6 @@ const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
                 GLib.source_remove(this._timeoutId);
                 this._timeoutId = 0;
             }
-            if (this._menuOpenSignalId) {
-                this.menu.disconnect(this._menuOpenSignalId);
-                this._menuOpenSignalId = 0;
-            }
             super.destroy();
         }
     }
@@ -778,6 +778,7 @@ const FrenchRepublicanCalendarTopMenu = GObject.registerClass(
 
 export default class FrenchRepublicanCalendarExtension extends Extension {
     enable() {
+        astro = new Astro();
         this._indicator = new FrenchRepublicanCalendarTopMenu();
         let pos = 1;
         if ('apps-menu' in Main.panel.statusArea)
@@ -790,5 +791,6 @@ export default class FrenchRepublicanCalendarExtension extends Extension {
             this._indicator.destroy();
             this._indicator = null;
         }
+        astro = null;
     }
 }
